@@ -1,0 +1,135 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from time import sleep
+
+# --- CSS-Selektoren für Detailseiten ---
+SELECTOR_PRODUCT_DESC = (
+    "#product-main-content > section.product-main "
+    "> section.product-sheet-description "
+    "> div.expandable-body > span"
+)
+SELECTOR_CONCEPT_DESC = (
+    "#product-main-content > section.product-main "
+    "> section.product-sheet-description "
+    "> div.expandable-body > div.product-sheet-concept > div"
+)
+SELECTOR_CATEGORIES = (
+    "#product-main-content > section.product-main "
+    "> section.product-sheet-description "
+    "> div.expandable-body > div.product-sheet-more > div:nth-child(2)"
+)
+SELECTOR_IMAGE = 'ul[id^="ambient-gallery-list"] li.product-overview a img'
+
+# --- Mapping roher Kategoriebegriffe ---
+CATEGORY_MAP = [
+    (["planting", "plant pots"], "Planter"),
+    (["bench"],                  "Bench"),
+    (["seating"],                "Other seating"),
+]
+
+def classify_category(raw_cats):
+    lc = [c.lower() for c in raw_cats]
+    if any("tree grate" in c or "tree grille" in c for c in lc):
+        return "Tree guard"
+    hits = set()
+    for keys, group in CATEGORY_MAP:
+        for key in keys:
+            if any(key in c for c in lc):
+                hits.add(group)
+                break
+    if len(hits) > 1:
+        return "Combination"
+    if len(hits) == 1:
+        return hits.pop()
+    return "Other"
+
+def scrape_architonic_urls(base_url, total_expected=439, delay=0.5):
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0'})
+    seen_urls = set()
+    page = 1
+
+    while True:
+        resp = session.get(f"{base_url}&page={page}")
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'lxml')
+        items = soup.select('ul[id^="product-list"] > li > div > a')
+        for a in items:
+            href = a['href']
+            url = href if href.startswith('http') else f"https://www.architonic.com{href}"
+            seen_urls.add(url)
+        if len(seen_urls) >= total_expected or not items:
+            break
+        page += 1
+        sleep(delay)
+
+    return list(seen_urls)
+
+def scrape_architonic_details(urls, delay=0.5):
+    session = requests.Session()
+    session.headers.update({'User-Agent': 'Mozilla/5.0'})
+    records = []
+    total = len(urls)
+
+    for idx, url in enumerate(urls, start=1):
+        print(f"[{idx}/{total}] Verarbeite: {url}")
+        resp = session.get(url)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'lxml')
+
+        # Produkt- und Konzeptbeschreibung
+        prod_el    = soup.select_one(SELECTOR_PRODUCT_DESC)
+        concept_el = soup.select_one(SELECTOR_CONCEPT_DESC)
+        pd_text    = prod_el.get_text(strip=True) if prod_el else ""
+        cd_text    = concept_el.get_text(strip=True) if concept_el else ""
+
+        # Kategorien aus Selector
+        cat_el = soup.select_one(SELECTOR_CATEGORIES)
+        raw = []
+        if cat_el:
+            txt = cat_el.get_text(separator=" ", strip=True)
+            if txt.lower().startswith("categorised in"):
+                txt = txt[len("Categorised in"):].strip()
+            raw = [c.strip() for c in txt.split(" - ") if c.strip()]
+
+        # Erste Parklet-Prüfung in den Beschreibungen
+        if "parklet" in pd_text.lower() or "parklet" in cd_text.lower():
+            main_cat = "Parklet"
+        else:
+            main_cat = classify_category(raw)
+            # zusätzlich noch Parklet aus den Kategorien fangen
+            if any("parklet" in c.lower() for c in raw):
+                main_cat = "Parklet"
+
+        # Bild-Link
+        img_el = soup.select_one(SELECTOR_IMAGE)
+        picture_link = img_el['src'] if img_el and img_el.has_attr('src') else ""
+
+        records.append({
+            "url":                 url,
+            "product_description": pd_text,
+            "concept_description": cd_text,
+            "raw_categories":      ", ".join(raw),
+            "category":            main_cat,
+            "picture_link":        picture_link,
+            "intended_use":        ""
+        })
+
+        sleep(delay)
+
+    return pd.DataFrame(records)
+
+if __name__ == "__main__":
+    BASE_URL = (
+        "https://www.architonic.com/en/advanced-search"
+        "?type=product&group=3221628%2C3238471"
+        "&usage=3271015&und=3210014%2C3221399%2C3210002"
+    )
+
+    # Testlauf mit 5 Produkten
+    urls_all = scrape_architonic_urls(BASE_URL, total_expected=5, delay=0.5)
+    df = scrape_architonic_details(urls_all, delay=0.5)
+
+    df.to_excel("architonic_products_with_pictures_test.xlsx", index=False)
+    print("\n✅ Test fertig – Datei: architonic_products_with_pictures_test.xlsx")
