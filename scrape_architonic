@@ -127,9 +127,13 @@ if __name__ == "__main__":
         "&usage=3271015&und=3210014%2C3221399%2C3210002"
     )
 
-    # Testlauf mit 5 Produkten
-    urls_all = scrape_architonic_urls(BASE_URL, total_expected=5, delay=0.5)
+    # 1) URLs sammeln – jetzt total_expected=439
+    urls_all = scrape_architonic_urls(BASE_URL, total_expected=439, delay=0.5)
+
+    # 2) Detailinformationen scrapen von allen gesammelten URLs
     df = scrape_architonic_details(urls_all, delay=0.5)
 
-    df.to_excel("architonic_products_with_pictures_test.xlsx", index=False)
-    print("\n✅ Test fertig – Datei: architonic_products_with_pictures_test.xlsx")
+    # 3) In Excel speichern
+    output_file = "architonic_products_with_pictures_all.xlsx"
+    df.to_excel(output_file, index=False)
+    print(f"\n✅ Fertig – Datei: architonic_scrape_all")
